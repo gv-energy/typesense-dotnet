@@ -3,11 +3,21 @@ using FluentAssertions.Execution;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Xunit;
 
 namespace Typesense.Tests;
+
+// The `AddressVectorSearch` type is created to test vector search functionality in Typesense.
+public record AddressVectorSearch
+{
+    [JsonPropertyName("id")]
+    public string Id { get; init; }
+    [JsonPropertyName("vec")]
+    public float[] Vec { get; init; }
+}
 
 public record Location
 {
@@ -1080,6 +1090,89 @@ public class TypesenseClientTests : IClassFixture<TypesenseFixture>
     }
 
     [Fact, TestPriority(11)]
+    public async Task Multi_search_query_single_type_multiple_multi_search_parameters()
+    {
+        var expected = new Company
+        {
+            Id = "124",
+            CompanyName = "Stark Industries",
+            NumEmployees = 6000,
+            Location = new Location
+            {
+                City = "Phoenix",
+                Country = "USA"
+            },
+        };
+
+        var responses = await _client.MultiSearch<Company>(
+            new List<MultiSearchParameters>
+            {
+                // The same queries are executed multiple times
+                // because we do not care about the response,
+                // but that we can do many multi searches at once.
+                new MultiSearchParameters("companies", "Stark", "company_name"),
+                new MultiSearchParameters("companies", "Stark", "company_name"),
+                new MultiSearchParameters("companies", "Stark", "company_name"),
+                new MultiSearchParameters("companies", "Stark", "company_name"),
+                new MultiSearchParameters("companies", "Stark", "company_name"),
+                new MultiSearchParameters("companies", "Stark", "company_name")
+            });
+
+        using (var scope = new AssertionScope())
+        {
+            responses.Count().Should().Be(6);
+            foreach (var response in responses)
+            {
+                response.Found.Should().Be(1);
+                response.Hits.First().Document.Should().BeEquivalentTo(expected);
+            }
+        }
+    }
+
+    [Fact, TestPriority(11)]
+    public async Task Multi_search_query_single_type_multiple_multi_search_parameters_one_failed()
+    {
+        var expected = new Company
+        {
+            Id = "124",
+            CompanyName = "Stark Industries",
+            NumEmployees = 6000,
+            Location = new Location
+            {
+                City = "Phoenix",
+                Country = "USA"
+            },
+        };
+
+        var responses = await _client.MultiSearch<Company>(
+            new List<MultiSearchParameters>
+            {
+                // The same queries are executed multiple times
+                // because we do not care about the response,
+                // but that we can do many multi searches at once.
+                new MultiSearchParameters("companies", "Stark", "company_name"),
+                new MultiSearchParameters("this_collection_does_not_exist", "Stark", "company_name"),
+            });
+
+        using (var scope = new AssertionScope())
+        {
+            responses.Count().Should().Be(2);
+
+            // Validate that first has no errors.
+            responses[0].Found.Should().Be(1);
+            responses[0].Hits.First().Document.Should().BeEquivalentTo(expected);
+            responses[0].ErrorMessage.Should().BeNull();
+            responses[0].ErrorCode.Should().BeNull();
+
+            // Validate that second has errors.
+            responses[1].Found.Should().BeNull();
+            responses[1].Hits.Should().BeNull();
+            responses[1].ErrorMessage.Should().Be("Not found.");
+            responses[1].ErrorCode.Should().Be(404);
+        }
+    }
+
+    [Fact, TestPriority(11)]
     public async Task Multi_search_query_single()
     {
         var expected = new Company
@@ -1527,6 +1620,102 @@ public class TypesenseClientTests : IClassFixture<TypesenseFixture>
         {
             response.Found.Should().Be(1);
             response.Hits.First().Document.Should().BeEquivalentTo(company);
+        }
+    }
+
+    [Fact, TestPriority(32)]
+    public async Task Can_do_vector_search()
+    {
+        const string COLLECTION_NAME = "address_vector_search";
+
+        try
+        {
+            var schema = new Schema(
+                COLLECTION_NAME,
+                new List<Field>
+                {
+                    new Field("vec", FieldType.FloatArray, 4)
+                });
+
+            _ = await _client.CreateCollection(schema);
+
+            await _client.CreateDocument(
+                COLLECTION_NAME,
+                new AddressVectorSearch()
+                {
+                    Id = "0",
+                    Vec = new float[] { 0.04F, 0.234F, 0.113F, 0.001F }
+                });
+
+            // We want to make sure the query works using the query object `VectorQuery`
+            var queryUsingQueryObject = new MultiSearchParameters(COLLECTION_NAME, "*")
+            {
+                // vec:([0.96826, 0.94, 0.39557, 0.306488], k:100)
+                VectorQuery = new(
+                    vector: new float[] { 0.96826F, 0.94F, 0.39557F, 0.306488F },
+                    k: 100)
+            };
+
+            // We want to make sure the query works using a query string
+            var queryUsingQueryString = new MultiSearchParameters(COLLECTION_NAME, "*")
+            {
+                // vec:([0.96826, 0.94, 0.39557, 0.306488], k:100)
+                VectorQuery = new("vec:([0.96826,0.94,0.39557,0.306488],k:100)")
+            };
+
+            var queryObjectResponse = await _client.MultiSearch<AddressVectorSearch>(queryUsingQueryObject);
+            var queryStringResponse = await _client.MultiSearch<AddressVectorSearch>(queryUsingQueryString);
+
+            using (var scope = new AssertionScope())
+            {
+                queryObjectResponse.Found.Should().Be(1);
+                queryObjectResponse.OutOf.Should().Be(1);
+                queryObjectResponse.Page.Should().Be(1);
+                queryObjectResponse.Hits.Count.Should().Be(1);
+                queryObjectResponse.Hits
+                    .First()
+                    .Should()
+                    .BeEquivalentTo(
+                        new Hit<AddressVectorSearch>(
+                            new List<Highlight>().AsReadOnly(),
+                            new AddressVectorSearch
+                            {
+                                Id = "0",
+                                Vec = new float[] { 0.04F, 0.234F, 0.113F, 0.001F }
+                            },
+                            null,
+                            0.19744956493377686));
+
+                queryStringResponse.Found.Should().Be(1);
+                queryStringResponse.OutOf.Should().Be(1);
+                queryStringResponse.Page.Should().Be(1);
+                queryStringResponse.Hits.Count.Should().Be(1);
+                queryStringResponse.Hits
+                    .First()
+                    .Should()
+                    .BeEquivalentTo(
+                        new Hit<AddressVectorSearch>(
+                            new List<Highlight>().AsReadOnly(),
+                            new AddressVectorSearch
+                            {
+                                Id = "0",
+                                Vec = new float[] { 0.04F, 0.234F, 0.113F, 0.001F }
+                            },
+                            null,
+                            0.19744956493377686));
+            }
+        }
+        finally
+        {
+            // Make sure that no matter what the collection is deleted.
+            try
+            {
+                _ = _client.DeleteCollection(COLLECTION_NAME);
+            }
+            catch (TypesenseApiNotFoundException)
+            {
+                //  Do nothing, it might have crashed before creating the collection.
+            }
         }
     }
 

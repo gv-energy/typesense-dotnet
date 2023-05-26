@@ -53,13 +53,18 @@ public record Hit<T>
     public T Document { get; init; }
 
     [JsonPropertyName("text_match")]
-    public long TextMatch { get; init; }
+    public long? TextMatch { get; init; }
 
-    public Hit(IReadOnlyList<Highlight> highlights, T document, long textMatch)
+    [JsonPropertyName("vector_distance")]
+    public double? VectorDistance { get; init; }
+
+    [JsonConstructor]
+    public Hit(IReadOnlyList<Highlight> highlights, T document, long? textMatch, double? vectorDistance)
     {
         Highlights = highlights;
         Document = document;
         TextMatch = textMatch;
+        VectorDistance = vectorDistance;
     }
 }
 
@@ -228,13 +233,55 @@ public record SearchGroupedResult<T> : SearchResultBase
     }
 }
 
-public record MultiSearchResult
+public record MultiSearchResult<T>
 {
-    public IEnumerable<SearchResult<object>> SearchResults { get; init; }
+    [JsonPropertyName("facet_counts")]
+    public IReadOnlyList<FacetCount>? FacetCounts { get; init; }
+
+    [JsonPropertyName("found")]
+    public int? Found { get; init; }
+
+    [JsonPropertyName("hits")]
+    public IReadOnlyList<Hit<T>>? Hits { get; init; }
+
+    [JsonPropertyName("out_of")]
+    public int? OutOf { get; init; }
+
+    [JsonPropertyName("page")]
+    public int? Page { get; init; }
+
+    [JsonPropertyName("search_cutoff")]
+    public bool? SearchCutoff { get; init; }
+
+    [JsonPropertyName("search_time_ms")]
+    public int? SearchTimeMs { get; init; }
+
+    [JsonPropertyName("code")]
+    public int? ErrorCode { get; init; }
+
+    [JsonPropertyName("error")]
+    public string? ErrorMessage { get; init; }
 
     [JsonConstructor]
-    public MultiSearchResult(IEnumerable<SearchResult<object>> searchResults)
+    public MultiSearchResult(
+        IReadOnlyList<FacetCount>? facetCounts,
+        int? found,
+        IReadOnlyList<Hit<T>>? hits,
+        int? outOf,
+        int? page,
+        bool? searchCutoff,
+        int? searchTimeMs,
+        int? errorCode,
+        string? errorMessage)
     {
-        SearchResults = searchResults;
+        FacetCounts = facetCounts;
+        Found = found;
+        Hits = hits;
+        OutOf = outOf;
+        Page = page;
+        SearchCutoff = searchCutoff;
+        SearchTimeMs = searchTimeMs;
+        ErrorCode = errorCode;
+        ErrorMessage = errorMessage;
     }
 }
